@@ -1,22 +1,36 @@
 import streamlit as st
 import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity
-import h5py
+import numpy as np
+from pymongo.mongo_client import MongoClient
+from pymongo.server_api import ServerApi
+
+uri = "mongodb+srv://spotify:hDvSHlgkbAldOsWS@spotify.yjp9nvd.mongodb.net/?retryWrites=true&w=majority"
+
+client = MongoClient(uri, server_api=ServerApi("1"))
+
+db = client["spofity_features"]
+features = db["features"]
+similarity = db["similarity"]
 
 df = pd.read_csv("data.csv")
-with h5py.File("lyrics_similarity_matrix.h5", "r") as hf:
-    loaded_matrix = hf["similarity_matrix"][:]
-    lyrics_df = pd.DataFrame(loaded_matrix)
 
-lyrics_similarity_matrix = cosine_similarity(lyrics_df)
 
-def recommend_by_id(song_id, num_of_songs=10):
-    idx = df.index[df["id"] == song_id].tolist()[0]
-    sim_scores = list(enumerate(lyrics_similarity_matrix[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-    sim_scores = sim_scores[1 : num_of_songs + 1]
-    song_indices = [i[0] for i in sim_scores]
-    return df[["id", "name"]].iloc[song_indices]
+def get_recommendations(song_id, num_of_songs=10):
+    target_record = features.find_one({"id": song_id})
+
+    if target_record and "cosine" in target_record:
+        target_cosine = np.array(target_record["cosine"])
+
+    sorted_indices = np.argsort(target_cosine)[::-1][1 : num_of_songs + 1]
+
+    similar_record = []
+
+    for idx in sorted_indices:
+        similar_record.append(
+            features.find_one({"df_idx": int(idx)}, {"_id": 0, "id": 1, "name": 1})
+        )
+
+    return similar_record
 
 
 # Main function
@@ -35,10 +49,10 @@ def main():
 
     if st.button("Recommend"):
         song_id = df[df["name"] == selected_song]["id"].values[0]
-        recommendations = recommend_by_id(song_id, 5)
+        recommendations = get_recommendations(song_id, 5)
 
         st.write("## Recommended Songs:")
-        for i, row in recommendations.iterrows():
+        for row in recommendations:
             id = row["id"]
             iframe = f'<iframe style="border-radius:12px" src="https://open.spotify.com/embed/track/{id}?utm_source=generator&theme=0" width="100%" height="352" frameBorder="0" allowfullscreen="" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>'
             st.markdown(iframe, unsafe_allow_html=True)
